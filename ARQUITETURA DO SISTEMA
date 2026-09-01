@@ -1,0 +1,819 @@
+Perfeito. Vamos retomar **exatamente do ponto definido**.
+
+# 🚀 OpsMetrics API
+
+# FASE 2 — ARQUITETURA DO SISTEMA
+
+Agora que concluímos a visão de negócio e o escopo inicial, vamos definir **como o sistema será organizado tecnicamente**.
+
+Nesta fase, ainda não vamos escrever código. Primeiro construiremos o mapa arquitetural que orientará toda a implementação.
+
+---
+
+# 2.1 — Objetivo da Arquitetura
+
+A arquitetura do OpsMetrics precisa atender principalmente a cinco requisitos:
+
+1. **Modularidade** — novos departamentos devem ser adicionados sem reescrever o sistema;
+2. **Baixo acoplamento** — um módulo não deve depender excessivamente de outro;
+3. **Manutenibilidade** — o código deve ser fácil de entender e evoluir;
+4. **Escalabilidade** — a aplicação deve suportar crescimento;
+5. **Reutilização** — funcionalidades comuns devem ficar centralizadas no Core.
+
+A pergunta central será:
+
+> Como construir hoje o módulo de Operações sem dificultar amanhã a implementação de RH, Financeiro ou Comercial?
+
+---
+
+# 2.2 — Decisão Arquitetural Principal
+
+Para este projeto, recomendo:
+
+## **Monólito Modular**
+
+Não começaremos com microserviços.
+
+A arquitetura será:
+
+```text
+                    OPSMETRICS API
+                          │
+                          ▼
+              ┌─────────────────────┐
+              │  MONÓLITO MODULAR   │
+              └──────────┬──────────┘
+                         │
+       ┌─────────────────┼──────────────────┐
+       │                 │                  │
+       ▼                 ▼                  ▼
+      CORE           OPERAÇÕES         FUTUROS
+                                         MÓDULOS
+                                           │
+                              ┌────────────┼────────────┐
+                              ▼            ▼            ▼
+                         COMERCIAL    FINANCEIRO       RH
+```
+
+---
+
+## Por que não Microserviços?
+
+Seria possível fazer:
+
+```text
+RH API
+Finance API
+Operations API
+Commercial API
+```
+
+Mas isso adicionaria complexidade desnecessária neste momento:
+
+* múltiplos serviços;
+* comunicação entre APIs;
+* autenticação distribuída;
+* múltiplos deploys;
+* observabilidade;
+* mensageria;
+* infraestrutura mais complexa.
+
+Para uma primeira versão, isso seria **complexidade prematura**.
+
+Nossa estratégia será:
+
+> **Começar simples, mas estruturar corretamente para permitir evolução futura.**
+
+Se no futuro algum módulo precisar ser independente, teremos uma base melhor para extraí-lo.
+
+---
+
+# 2.3 — Estilo Arquitetural
+
+Vamos combinar alguns conceitos arquiteturais.
+
+## Arquitetura Modular
+
+Organização por domínio:
+
+```text
+modules/
+│
+├── operations/
+├── commercial/
+├── financial/
+├── human_resources/
+└── ...
+```
+
+---
+
+## Arquitetura em Camadas
+
+Dentro de cada módulo:
+
+```text
+API
+ ↓
+SERVICE
+ ↓
+REPOSITORY
+ ↓
+DATABASE
+```
+
+Visualmente:
+
+```text
+┌─────────────────────────────┐
+│         API LAYER           │
+│                             │
+│ Routers / Endpoints         │
+└──────────────┬──────────────┘
+               │
+               ▼
+┌─────────────────────────────┐
+│       SERVICE LAYER         │
+│                             │
+│ Business Rules              │
+│ Use Cases                   │
+└──────────────┬──────────────┘
+               │
+               ▼
+┌─────────────────────────────┐
+│      REPOSITORY LAYER       │
+│                             │
+│ Data Access                 │
+└──────────────┬──────────────┘
+               │
+               ▼
+┌─────────────────────────────┐
+│       DATABASE LAYER        │
+│                             │
+│ PostgreSQL                  │
+└─────────────────────────────┘
+```
+
+---
+
+# 2.4 — Arquitetura Geral da Plataforma
+
+A arquitetura geral ficará inicialmente assim:
+
+```text
+                         CLIENTES
+                            │
+            ┌───────────────┼────────────────┐
+            │               │                │
+            ▼               ▼                ▼
+         Frontend        Power BI       Sistemas Externos
+            │               │                │
+            └───────────────┼────────────────┘
+                            │
+                            ▼
+                  ┌─────────────────┐
+                  │   OPSMETRICS    │
+                  │      API        │
+                  │                 │
+                  │     FastAPI     │
+                  └────────┬────────┘
+                           │
+         ┌─────────────────┼─────────────────┐
+         │                 │                 │
+         ▼                 ▼                 ▼
+       CORE           OPERATIONS        FUTUROS
+       MODULE           MODULE           MODULES
+         │                 │                 │
+         └─────────────────┼─────────────────┘
+                           │
+                           ▼
+                    DATA ACCESS
+                           │
+                           ▼
+                     PostgreSQL
+```
+
+---
+
+# 2.5 — Componentes Principais
+
+Vamos dividir a aplicação em componentes.
+
+## 1. API Layer
+
+Responsável pela comunicação externa.
+
+Contém:
+
+```text
+routers
+endpoints
+requests
+responses
+dependencies
+```
+
+Exemplo:
+
+```text
+POST /api/v1/operations
+```
+
+O Router não deve conter regras complexas de negócio.
+
+Ele apenas:
+
+```text
+Recebe Request
+      ↓
+Valida dados
+      ↓
+Chama Service
+      ↓
+Retorna Response
+```
+
+---
+
+# 2. Service Layer
+
+Aqui estará a lógica da aplicação.
+
+Exemplo:
+
+```text
+OperationService
+```
+
+Responsável por:
+
+* validar regras de negócio;
+* processar operações;
+* calcular informações;
+* coordenar repositórios;
+* executar casos de uso.
+
+Fluxo:
+
+```text
+Router
+   │
+   ▼
+OperationService
+   │
+   ├── validar dados
+   │
+   ├── aplicar regras
+   │
+   ├── consultar repository
+   │
+   └── retornar resultado
+```
+
+---
+
+# 2. Repository Layer
+
+Responsável exclusivamente pelo acesso aos dados.
+
+Exemplo:
+
+```text
+OperationRepository
+```
+
+Funções:
+
+```text
+create()
+find_by_id()
+find_all()
+update()
+delete()
+```
+
+A regra será:
+
+> Repository não conhece HTTP.
+
+Ou seja, ele não deve saber se a chamada veio de:
+
+```text
+GET
+POST
+PUT
+DELETE
+```
+
+Ele conhece apenas persistência.
+
+---
+
+# 2.6 — Separação por Domínio
+
+Aqui está uma decisão importante para o crescimento do projeto.
+
+Não organizaremos apenas assim:
+
+```text
+routers/
+models/
+services/
+repositories/
+```
+
+Porque, com muitos módulos, isso pode ficar confuso.
+
+Imagine daqui a algum tempo:
+
+```text
+services/
+├── rh_service.py
+├── finance_service.py
+├── operations_service.py
+├── commercial_service.py
+├── marketing_service.py
+├── maintenance_service.py
+└── ...
+```
+
+Em vez disso, vamos organizar principalmente por **domínio**.
+
+Exemplo:
+
+```text
+modules/
+│
+├── operations/
+│   │
+│   ├── router.py
+│   ├── service.py
+│   ├── repository.py
+│   ├── models.py
+│   └── schemas.py
+│
+├── commercial/
+│
+├── financial/
+│
+└── human_resources/
+```
+
+Cada módulo terá autonomia interna.
+
+Isso será muito importante quando começarmos a crescer.
+
+---
+
+# 2.7 — Arquitetura do Core
+
+O Core conterá tudo aquilo que é compartilhado.
+
+```text
+core/
+│
+├── config/
+│
+├── security/
+│
+├── database/
+│
+├── exceptions/
+│
+├── dependencies/
+│
+└── shared/
+```
+
+Exemplo:
+
+### Config
+
+```text
+core/config/
+```
+
+Responsável por:
+
+* variáveis de ambiente;
+* configurações;
+* ambientes;
+* settings.
+
+---
+
+### Security
+
+```text
+core/security/
+```
+
+Responsável por:
+
+* autenticação;
+* JWT;
+* hashing;
+* autorização.
+
+---
+
+### Database
+
+```text
+core/database/
+```
+
+Responsável por:
+
+* conexão;
+* sessão;
+* configuração SQLAlchemy;
+* base declarativa.
+
+---
+
+### Exceptions
+
+```text
+core/exceptions/
+```
+
+Responsável por:
+
+* exceções personalizadas;
+* tratamento global de erros.
+
+---
+
+# 2.8 — Fluxo de uma Requisição
+
+Vamos imaginar:
+
+```http
+POST /api/v1/operations
+```
+
+O fluxo será:
+
+```text
+CLIENTE
+   │
+   │ HTTP Request
+   ▼
+FASTAPI ROUTER
+   │
+   │ valida Schema
+   ▼
+SERVICE
+   │
+   │ aplica regras
+   ▼
+REPOSITORY
+   │
+   │ SQLAlchemy
+   ▼
+POSTGRESQL
+   │
+   │ dados
+   ▼
+REPOSITORY
+   │
+   ▼
+SERVICE
+   │
+   ▼
+ROUTER
+   │
+   ▼
+HTTP RESPONSE
+```
+
+Esse fluxo será uma das bases do projeto.
+
+---
+
+# 2.9 — Arquitetura dos Módulos
+
+Cada módulo deverá seguir uma estrutura semelhante.
+
+Exemplo futuro:
+
+```text
+operations/
+│
+├── router.py
+├── schemas.py
+├── service.py
+├── repository.py
+├── models.py
+└── dependencies.py
+```
+
+Conceitualmente:
+
+```text
+OPERATIONS MODULE
+│
+├── API
+│   └── router.py
+│
+├── VALIDATION
+│   └── schemas.py
+│
+├── BUSINESS
+│   └── service.py
+│
+├── DATA ACCESS
+│   └── repository.py
+│
+└── PERSISTENCE
+    └── models.py
+```
+
+---
+
+# 2.10 — Camada de Indicadores
+
+Aqui teremos uma particularidade importante.
+
+Os indicadores não devem ficar misturados diretamente com CRUD de operações.
+
+Por exemplo:
+
+```text
+OperationService
+```
+
+não deveria ser responsável por todas as fórmulas de KPIs.
+
+Teremos uma camada especializada:
+
+```text
+indicators/
+```
+
+Exemplo:
+
+```text
+modules/
+│
+├── operations/
+│
+│   ├── router.py
+│   ├── service.py
+│   └── repository.py
+│
+└── indicators/
+    │
+    ├── router.py
+    ├── service.py
+    └── calculators/
+```
+
+Os cálculos poderão ficar separados:
+
+```text
+calculators/
+│
+├── productivity.py
+├── efficiency.py
+├── sla.py
+├── delay.py
+└── volume.py
+```
+
+Assim:
+
+```text
+OPERATION DATA
+       │
+       ▼
+INDICATOR SERVICE
+       │
+       ├── Productivity Calculator
+       ├── Efficiency Calculator
+       ├── SLA Calculator
+       └── Delay Calculator
+```
+
+Essa decisão será especialmente útil quando novos módulos forem adicionados.
+
+---
+
+# 2.11 — Arquitetura de Dados
+
+Inicialmente teremos:
+
+```text
+                    OPSMETRICS API
+                           │
+                           ▼
+                      SQLAlchemy
+                           │
+                           ▼
+                      PostgreSQL
+```
+
+Mas futuramente a arquitetura poderá crescer:
+
+```text
+                        OPSMETRICS
+                            │
+          ┌─────────────────┼─────────────────┐
+          │                 │                 │
+          ▼                 ▼                 ▼
+      PostgreSQL         Redis          External APIs
+          │
+          ▼
+      Analytics
+```
+
+Por enquanto:
+
+> **PostgreSQL será nossa fonte principal de persistência.**
+
+---
+
+# 2.12 — Organização de Dependências
+
+Teremos injeção de dependências através do próprio FastAPI.
+
+Conceitualmente:
+
+```text
+REQUEST
+   │
+   ▼
+DEPENDENCY
+   │
+   ├── Database Session
+   │
+   ├── Current User
+   │
+   └── Permissions
+```
+
+Isso permitirá que endpoints recebam apenas aquilo que precisam.
+
+Exemplo conceitual:
+
+```python
+def create_operation(
+    data: OperationCreate,
+    db: Session,
+    current_user: User
+):
+```
+
+Mas implementaremos isso mais adiante.
+
+---
+
+# 2.13 — Versionamento da API
+
+Desde o início utilizaremos versionamento.
+
+Estrutura:
+
+```text
+/api/v1/
+```
+
+Exemplo:
+
+```text
+/api/v1/operations
+/api/v1/indicators
+/api/v1/users
+/api/v1/departments
+```
+
+No futuro, caso seja necessário alterar contratos de forma incompatível:
+
+```text
+/api/v2/
+```
+
+Isso é importante porque uma API em produção pode possuir consumidores externos.
+
+---
+
+# 2.14 — Arquitetura de Segurança
+
+A segurança será transversal.
+
+```text
+CLIENT
+   │
+   ▼
+AUTHENTICATION
+   │
+   ▼
+JWT
+   │
+   ▼
+AUTHORIZATION
+   │
+   ▼
+API RESOURCE
+```
+
+Teremos futuramente:
+
+* autenticação;
+* JWT;
+* hashing de senha;
+* controle de acesso;
+* perfis;
+* permissões.
+
+Não vamos implementar agora, mas a arquitetura já será preparada.
+
+---
+
+# 2.15 — Decisão Arquitetural Oficial
+
+Até aqui, podemos formalizar:
+
+## O OpsMetrics será construído utilizando:
+
+### Estilo principal
+
+**Monólito Modular**
+
+### Organização
+
+**Domain-Driven Modular Organization**
+
+### Comunicação
+
+**REST API**
+
+### Arquitetura interna
+
+**Arquitetura em Camadas**
+
+```text
+Router
+   ↓
+Service
+   ↓
+Repository
+   ↓
+Database
+```
+
+### Persistência
+
+**PostgreSQL + SQLAlchemy**
+
+### Validação
+
+**Pydantic**
+
+### Versionamento
+
+```text
+/api/v1/
+```
+
+---
+
+# 🗺️ Visão consolidada
+
+```text
+                         ┌──────────────┐
+                         │   CLIENTES   │
+                         │              │
+                         │ BI / Sistemas│
+                         └──────┬───────┘
+                                │
+                                ▼
+                    ┌─────────────────────┐
+                    │     FASTAPI API     │
+                    │                     │
+                    │      /api/v1        │
+                    └──────────┬──────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+              ▼                ▼                ▼
+            CORE          OPERATIONS        INDICATORS
+              │                │                │
+              └────────────────┼────────────────┘
+                               │
+                               ▼
+                       SERVICE LAYER
+                               │
+                               ▼
+                     REPOSITORY LAYER
+                               │
+                               ▼
+                         SQLALCHEMY
+                               │
+                               ▼
+                         POSTGRESQL
+```
+
+---
+
