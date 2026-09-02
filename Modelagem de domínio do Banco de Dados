@@ -1,0 +1,1006 @@
+# 🚀 OpsMetrics API — FASE 3
+
+# Modelagem de Domínio e Banco de Dados
+
+Vamos iniciar pela etapa correta:
+
+# 3.1 — Identificação das Entidades do Domínio
+
+Antes de criar tabelas no PostgreSQL, precisamos entender **quais objetos existem no negócio** e qual responsabilidade cada um possui.
+
+A primeira versão do OpsMetrics será composta por duas grandes áreas:
+
+```text
+CAMADA CORPORATIVA (CORE)
+            +
+MÓDULO OPERACIONAL
+            +
+CAMADA DE INDICADORES
+```
+
+---
+
+# 1. Visão macro do domínio
+
+```text
+┌─────────────────────────────────────┐
+│           ORGANIZAÇÃO               │
+│                                     │
+│  Empresa que utiliza o OpsMetrics   │
+└──────────────────┬──────────────────┘
+                   │
+                   │ possui
+                   ▼
+┌─────────────────────────────────────┐
+│              UNIDADES               │
+│                                     │
+│ Filiais / Plantas / Escritórios     │
+└──────────────────┬──────────────────┘
+                   │
+                   │ possuem
+                   ▼
+┌─────────────────────────────────────┐
+│           DEPARTAMENTOS             │
+│                                     │
+│ Operações / RH / Financeiro etc.    │
+└──────────────────┬──────────────────┘
+                   │
+                   │ possuem
+                   ▼
+┌─────────────────────────────────────┐
+│             USUÁRIOS                │
+│                                     │
+│ Administradores / Gestores / etc.   │
+└─────────────────────────────────────┘
+```
+
+Paralelamente:
+
+```text
+┌─────────────────────┐
+│      OPERAÇÕES      │
+└──────────┬──────────┘
+           │
+           │ possui
+           ▼
+┌─────────────────────┐
+│ REGISTROS           │
+│ OPERACIONAIS        │
+└──────────┬──────────┘
+           │
+           │ gera dados
+           ▼
+┌─────────────────────┐
+│ INDICADORES / KPIs  │
+└─────────────────────┘
+```
+
+---
+
+# 2. Separação dos domínios
+
+Vamos dividir inicialmente o sistema em três grupos.
+
+## Domínio 1 — Estrutura Corporativa
+
+Responsável por representar a empresa.
+
+Entidades:
+
+```text
+Organization
+Unit
+Department
+```
+
+Em português conceitualmente:
+
+```text
+Organização
+Unidade
+Departamento
+```
+
+---
+
+## Domínio 2 — Identidade e Acesso
+
+Responsável pelos usuários do sistema.
+
+Entidades:
+
+```text
+User
+Role
+Permission
+```
+
+Mais adiante poderemos ter:
+
+```text
+Role
+   │
+   └── Permissions
+```
+
+Exemplo:
+
+```text
+ADMINISTRADOR
+GESTOR
+ANALISTA
+OPERADOR
+VISUALIZADOR
+```
+
+---
+
+## Domínio 3 — Operações
+
+Este será nosso primeiro módulo de negócio.
+
+Entidades iniciais:
+
+```text
+Operation
+OperationalRecord
+OperationalGoal
+```
+
+---
+
+## Domínio 4 — Indicadores
+
+Inicialmente não precisamos tratar o indicador como uma tabela obrigatória.
+
+Teremos conceitualmente:
+
+```text
+Indicator
+Metric
+Calculation
+```
+
+Mas precisamos tomar uma decisão importante.
+
+---
+
+# 3. Indicador é uma entidade ou apenas um cálculo?
+
+Vamos analisar.
+
+Exemplo:
+
+```text
+Produtividade
+=
+Quantidade Produzida
+/
+Tempo Trabalhado
+```
+
+O indicador pode ser calculado a partir dos registros operacionais.
+
+Portanto:
+
+```text
+Operational Records
+        │
+        ▼
+Calculation
+        │
+        ▼
+Indicator Result
+```
+
+Inicialmente, podemos não persistir o resultado.
+
+Mas existe outra informação que precisa existir no sistema:
+
+### Definição do indicador
+
+Exemplo:
+
+```text
+Nome:
+Produtividade
+
+Código:
+PRODUCTIVITY
+
+Unidade:
+Unidades/hora
+
+Objetivo:
+Medir produção por período.
+```
+
+Isso pode futuramente se tornar configurável.
+
+Portanto, conceitualmente teremos:
+
+```text
+Indicator
+```
+
+Mas sua implementação física poderá ser decidida posteriormente.
+
+---
+
+# 4. Entidades do Core Corporativo
+
+Vamos detalhar.
+
+---
+
+## 🏢 Organization
+
+Representa a empresa cliente da plataforma.
+
+Exemplo:
+
+```text
+Empresa ABC Ltda
+```
+
+Atributos conceituais:
+
+```text
+Organization
+──────────────
+id
+name
+legal_name
+tax_id
+status
+created_at
+updated_at
+```
+
+### Responsabilidade
+
+Representar a organização proprietária dos dados.
+
+---
+
+# 🏭 Unit
+
+Uma organização pode possuir várias unidades.
+
+Exemplo:
+
+```text
+Empresa ABC
+│
+├── Matriz
+├── Filial São Paulo
+├── Filial Rio de Janeiro
+└── Centro de Distribuição
+```
+
+Atributos:
+
+```text
+Unit
+──────────────
+id
+organization_id
+name
+code
+city
+state
+status
+```
+
+Relacionamento:
+
+```text
+Organization 1 ─────── N Units
+```
+
+---
+
+# 🏢 Department
+
+Representa uma área organizacional.
+
+Exemplo:
+
+```text
+Operações
+Financeiro
+Comercial
+Recursos Humanos
+Logística
+Qualidade
+```
+
+Atributos:
+
+```text
+Department
+──────────────
+id
+organization_id
+name
+code
+description
+status
+```
+
+Aqui precisamos fazer uma observação.
+
+Um departamento pode existir em várias unidades.
+
+Exemplo:
+
+```text
+Empresa ABC
+│
+├── Unidade São Paulo
+│   ├── Operações
+│   └── Financeiro
+│
+└── Unidade Rio de Janeiro
+    ├── Operações
+    └── Financeiro
+```
+
+Portanto, mais adiante precisaremos decidir se:
+
+```text
+Department pertence à Organization
+```
+
+ou:
+
+```text
+Department pertence à Unit
+```
+
+Minha recomendação é separar o conceito de **Departamento Corporativo** da **estrutura física/local**.
+
+Exemplo:
+
+```text
+Organization
+      │
+      ├── Departments
+      │
+      └── Units
+```
+
+E criar uma associação:
+
+```text
+UnitDepartment
+```
+
+Assim:
+
+```text
+Organization
+│
+├── Departments
+│     ├── Operations
+│     ├── Finance
+│     └── HR
+│
+└── Units
+      │
+      ├── Unit A
+      └── Unit B
+```
+
+A associação:
+
+```text
+UnitDepartment
+──────────────
+unit_id
+department_id
+```
+
+Isso permite que o mesmo departamento exista operacionalmente em diversas unidades.
+
+Essa será uma decisão interessante para sistemas corporativos.
+
+---
+
+# 5. Entidade User
+
+Representa quem acessa a API.
+
+```text
+User
+──────────────
+id
+organization_id
+name
+email
+password_hash
+is_active
+created_at
+updated_at
+```
+
+Um usuário pertence inicialmente a uma organização.
+
+Relacionamento:
+
+```text
+Organization 1 ─────── N Users
+```
+
+---
+
+# 6. Role
+
+Representa o perfil de acesso.
+
+Exemplo:
+
+```text
+ADMIN
+MANAGER
+ANALYST
+OPERATOR
+VIEWER
+```
+
+Estrutura:
+
+```text
+Role
+──────────────
+id
+name
+description
+```
+
+---
+
+# 7. Permission
+
+Representa permissões específicas.
+
+Exemplo:
+
+```text
+operations:create
+operations:read
+operations:update
+operations:delete
+```
+
+No futuro:
+
+```text
+Role
+   │
+   │ N
+   │
+   ▼
+RolePermission
+   │
+   │ N
+   │
+   ▼
+Permission
+```
+
+Não precisamos implementar tudo imediatamente, mas devemos prever o domínio.
+
+---
+
+# 8. Domínio de Operações
+
+Agora entramos no primeiro módulo funcional.
+
+## Pergunta central:
+
+> O que exatamente é uma Operation dentro do OpsMetrics?
+
+Precisamos evitar um conceito genérico demais.
+
+Minha definição proposta:
+
+> **Operation representa uma atividade, processo ou fluxo mensurável dentro de um departamento.**
+
+Exemplos:
+
+### Logística
+
+```text
+Separação de Pedidos
+Expedição
+Entrega
+```
+
+### Atendimento
+
+```text
+Atendimento ao Cliente
+Resolução de Chamados
+```
+
+### Produção
+
+```text
+Montagem
+Inspeção
+Produção
+```
+
+### Administrativo
+
+```text
+Processamento de Documentos
+Análise de Solicitações
+```
+
+Portanto:
+
+```text
+Operation
+```
+
+não representa uma transação individual.
+
+Ela representa um **tipo de atividade mensurável**.
+
+---
+
+# 9. Entidade Operation
+
+Estrutura conceitual:
+
+```text
+Operation
+─────────────────────
+id
+
+organization_id
+department_id
+unit_id
+
+name
+code
+description
+
+status
+
+created_at
+updated_at
+```
+
+Exemplo:
+
+```text
+Operation
+
+Nome:
+Processamento de Pedidos
+
+Departamento:
+Operações
+
+Unidade:
+Centro de Distribuição
+
+Código:
+PROC_PEDIDOS
+```
+
+---
+
+# 10. Entidade OperationalRecord
+
+Aqui teremos os dados reais.
+
+Exemplo:
+
+```text
+Operation:
+Processamento de Pedidos
+
+Data:
+01/09/2026
+
+Quantidade:
+250
+
+Tempo:
+480 minutos
+
+Status:
+Completed
+```
+
+Estrutura:
+
+```text
+OperationalRecord
+────────────────────────
+
+id
+
+operation_id
+
+reference_date
+
+quantity
+
+execution_time
+
+status
+
+created_at
+```
+
+Relacionamento:
+
+```text
+Operation 1 ─────── N OperationalRecords
+```
+
+---
+
+# 11. OperationalGoal
+
+Representa metas.
+
+Exemplo:
+
+```text
+Operation:
+Processamento de Pedidos
+
+Meta:
+200 pedidos/dia
+
+Período:
+Mensal
+```
+
+Estrutura:
+
+```text
+OperationalGoal
+──────────────────
+
+id
+
+operation_id
+
+target_value
+
+period_type
+
+start_date
+end_date
+
+status
+```
+
+Exemplo:
+
+```text
+Meta:
+5000 pedidos
+
+Período:
+01/09/2026
+até
+30/09/2026
+```
+
+---
+
+# 12. Primeira visão do domínio
+
+Até aqui temos:
+
+```text
+ORGANIZATION
+     │
+     │ 1
+     │
+     ├──────────── N UNITS
+     │
+     ├──────────── N DEPARTMENTS
+     │
+     └──────────── N USERS
+
+
+UNIT
+ │
+ │ N
+ │
+ └──────────── N DEPARTMENTS
+
+
+DEPARTMENT
+ │
+ │ 1
+ │
+ └──────────── N OPERATIONS
+
+
+OPERATION
+ │
+ ├──────────── N OPERATIONAL RECORDS
+ │
+ └──────────── N OPERATIONAL GOALS
+```
+
+---
+
+# 13. Diagrama conceitual inicial
+
+```text
+                    ┌────────────────┐
+                    │ ORGANIZATION   │
+                    └───────┬────────┘
+                            │
+             ┌──────────────┼──────────────┐
+             │              │              │
+             ▼              ▼              ▼
+          UNITS       DEPARTMENTS        USERS
+             │              │
+             │              │
+             └──────┬───────┘
+                    │
+                    ▼
+            UNIT_DEPARTMENT
+                    │
+                    ▼
+               OPERATIONS
+                    │
+           ┌────────┴────────┐
+           │                 │
+           ▼                 ▼
+   OPERATIONAL_RECORD    OPERATIONAL_GOAL
+           │                 │
+           └────────┬────────┘
+                    │
+                    ▼
+               INDICATORS
+```
+
+---
+
+# 14. Um refinamento importante: Multiempresa
+
+Precisamos decidir algo agora.
+
+O OpsMetrics será:
+
+### Opção A — Sistema para uma única empresa
+
+```text
+OpsMetrics
+     │
+     └── Empresa
+```
+
+Ou:
+
+### Opção B — Plataforma Multiempresa
+
+```text
+OpsMetrics
+│
+├── Empresa A
+├── Empresa B
+├── Empresa C
+└── Empresa D
+```
+
+Minha recomendação arquitetural é:
+
+# **Projetar como Multiempresa desde o início.**
+
+Isso não significa que precisamos vender como SaaS agora.
+
+Significa apenas que o modelo será preparado para múltiplas organizações.
+
+Por quê?
+
+Porque isso melhora a qualidade do projeto e permite evolução futura.
+
+Teremos:
+
+```text
+Organization
+      │
+      ├── Users
+      ├── Units
+      ├── Departments
+      └── Operations
+```
+
+E praticamente todos os dados de negócio poderão ser isolados por:
+
+```text
+organization_id
+```
+
+---
+
+# 15. Estratégia inicial de isolamento
+
+Para a primeira versão:
+
+```text
+Shared Database
+Shared Schema
+Organization ID
+```
+
+Exemplo:
+
+```text
+operations
+─────────────────
+
+id
+organization_id
+name
+...
+```
+
+Assim:
+
+```text
+DATABASE
+│
+├── Organization A Data
+│
+├── Organization B Data
+│
+└── Organization C Data
+```
+
+A aplicação será responsável por garantir isolamento lógico.
+
+No futuro poderíamos evoluir para:
+
+```text
+Database per Tenant
+```
+
+ou:
+
+```text
+Schema per Tenant
+```
+
+Mas seria complexidade excessiva agora.
+
+---
+
+# 16. Entidades identificadas oficialmente
+
+Para a primeira versão, temos:
+
+## Core
+
+```text
+Organization
+Unit
+Department
+UnitDepartment
+
+User
+Role
+Permission
+```
+
+## Operations
+
+```text
+Operation
+OperationalRecord
+OperationalGoal
+```
+
+## Indicators
+
+Conceitualmente:
+
+```text
+Indicator
+```
+
+Ainda vamos decidir sua modelagem física.
+
+---
+
+# 17. Uma decisão importante antes do próximo passo
+
+Antes de desenharmos os relacionamentos finais, precisamos definir melhor a **semântica da estrutura organizacional**.
+
+Por exemplo:
+
+### Uma operação pertence a:
+
+```text
+Organization?
+```
+
+ou:
+
+```text
+Department?
+```
+
+ou:
+
+```text
+Unit + Department?
+```
+
+Minha recomendação é:
+
+```text
+Organization
+      │
+      ▼
+Unit
+      │
+      ▼
+Department
+      │
+      ▼
+Operation
+```
+
+Mas isso possui uma limitação.
+
+Nem todas as empresas possuem exatamente essa hierarquia.
+
+Uma estrutura pode ser:
+
+```text
+Organization
+    ↓
+Department
+    ↓
+Unit
+```
+
+Outra:
+
+```text
+Organization
+    ↓
+Business Area
+    ↓
+Department
+```
+
+Portanto, precisamos encontrar um modelo que seja suficientemente flexível sem tornar o banco excessivamente abstrato.
+
+---
+
+# 📍 Próxima etapa — 3.2
+
+Agora vamos aprofundar:
+
+# **Relacionamentos e Regras de Cardinalidade**
+
+Vamos definir formalmente:
+
+* Organization → Unit;
+* Organization → Department;
+* Unit ↔ Department;
+* Organization → User;
+* User ↔ Roles;
+* Role ↔ Permissions;
+* Department → Operations;
+* Operation → Operational Records;
+* Operation → Goals;
+* relação dos Indicadores com os dados operacionais.
+
+Ao final dessa etapa teremos o **modelo conceitual completo**, pronto para ser transformado em um diagrama ER e, posteriormente, no modelo lógico do PostgreSQL.
