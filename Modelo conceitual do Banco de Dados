@@ -1,0 +1,1123 @@
+Perfeito. Vamos retomar exatamente do ponto em que paramos.
+
+# 🚀 OpsMetrics API — FASE 3
+
+## 3.2 — Relacionamentos e Regras de Cardinalidade
+
+Agora vamos transformar a lista de entidades em um **modelo de domínio coerente**, definindo quem se relaciona com quem e quais regras precisam ser respeitadas.
+
+Essa etapa é crítica porque um erro aqui se propaga para:
+
+```text
+Modelo Conceitual
+      ↓
+Modelo Lógico
+      ↓
+PostgreSQL
+      ↓
+SQLAlchemy
+      ↓
+API
+```
+
+---
+
+# 1. Visão geral dos relacionamentos
+
+Temos três blocos principais:
+
+```text
+CORE CORPORATIVO
+       │
+       ├── Estrutura Organizacional
+       │
+       └── Identidade e Acesso
+       
+OPERATIONS
+       │
+       ├── Operações
+       ├── Registros
+       └── Metas
+
+INDICATORS
+       │
+       └── KPIs e Métricas
+```
+
+A primeira decisão será estabelecer a hierarquia corporativa.
+
+---
+
+# 2. Organization → Unit
+
+Uma organização pode possuir diversas unidades.
+
+Exemplo:
+
+```text
+Empresa ABC
+│
+├── Matriz
+├── Filial Rio de Janeiro
+├── Filial São Paulo
+└── Centro de Distribuição
+```
+
+Portanto:
+
+```text
+Organization 1 ─────── N Unit
+```
+
+### Regra
+
+Uma unidade pertence a apenas uma organização.
+
+```text
+Organization
+      │
+      │ 1
+      │
+      └──────── N
+                 │
+                Unit
+```
+
+### Cardinalidade
+
+| Entidade     | Cardinalidade |
+| ------------ | ------------- |
+| Organization | 1             |
+| Unit         | N             |
+
+---
+
+# 3. Organization → Department
+
+Aqui temos uma decisão arquitetural importante.
+
+Os departamentos representam áreas de negócio da organização:
+
+```text
+Operações
+Financeiro
+RH
+Comercial
+Marketing
+Compras
+```
+
+Uma organização pode possuir vários departamentos.
+
+```text
+Organization 1 ─────── N Departments
+```
+
+Exemplo:
+
+```text
+Empresa ABC
+│
+├── Operações
+├── Financeiro
+├── Comercial
+├── Recursos Humanos
+└── Tecnologia
+```
+
+Até aqui:
+
+```text
+Organization
+     │
+     ├──────── Units
+     │
+     └──────── Departments
+```
+
+---
+
+# 4. Unit ↔ Department
+
+Agora temos um relacionamento mais interessante.
+
+Um departamento pode existir em diversas unidades.
+
+Exemplo:
+
+```text
+Empresa ABC
+
+Matriz
+├── Financeiro
+├── RH
+└── Comercial
+
+Filial RJ
+├── Financeiro
+└── Operações
+
+Filial SP
+├── Financeiro
+├── RH
+└── Operações
+```
+
+Portanto:
+
+```text
+Unit N ─────── N Department
+```
+
+Relacionamentos N:N não devem ser implementados diretamente no banco.
+
+Criaremos uma entidade associativa:
+
+# UnitDepartment
+
+```text
+Unit
+   │
+   │
+   ▼
+UnitDepartment
+   ▲
+   │
+   │
+Department
+```
+
+Estrutura conceitual:
+
+```text
+UnitDepartment
+────────────────
+id
+
+unit_id
+department_id
+
+status
+created_at
+```
+
+Assim:
+
+```text
+Organization
+│
+├── Units
+│
+├── Departments
+│
+└── UnitDepartments
+```
+
+### Regra
+
+Uma associação entre Unidade e Departamento deve ser única.
+
+Ou seja:
+
+```text
+Unit A + Financeiro
+```
+
+não pode ser cadastrada duas vezes.
+
+Posteriormente teremos uma constraint:
+
+```text
+UNIQUE(unit_id, department_id)
+```
+
+---
+
+# 5. Uma evolução importante: onde a Operation pertence?
+
+Aqui precisamos ser criteriosos.
+
+Inicialmente pensamos:
+
+```text
+Department
+     │
+     ▼
+Operation
+```
+
+Mas isso não representa completamente a realidade.
+
+Imagine:
+
+```text
+Departamento: Operações
+```
+
+Existente em:
+
+```text
+Centro de Distribuição RJ
+Centro de Distribuição SP
+```
+
+As operações podem ser diferentes por unidade.
+
+Exemplo:
+
+```text
+CD RJ
+└── Operações
+    ├── Separação de Pedidos
+    └── Expedição
+
+CD SP
+└── Operações
+    ├── Picking
+    └── Cross Docking
+```
+
+Portanto, a melhor modelagem será:
+
+```text
+UnitDepartment
+       │
+       │ 1
+       │
+       └──────── N
+                  │
+              Operation
+```
+
+Isso é melhor do que:
+
+```text
+Department
+       │
+       ▼
+Operation
+```
+
+porque contextualiza a operação dentro da estrutura organizacional.
+
+---
+
+# 6. Relacionamento UnitDepartment → Operation
+
+Formalmente:
+
+```text
+UnitDepartment 1 ─────── N Operations
+```
+
+Exemplo:
+
+```text
+Unit: CD Rio
+Department: Operations
+
+        │
+        ▼
+
+Operations
+
+├── Separação
+├── Conferência
+└── Expedição
+```
+
+Cada operação pertence a uma única associação Unidade + Departamento.
+
+Isso facilita filtros futuros:
+
+```http
+GET /operations?unit_id=1
+
+GET /operations?department_id=2
+```
+
+---
+
+# 7. Operation → OperationalRecord
+
+Uma operação pode possuir muitos registros.
+
+Exemplo:
+
+```text
+Operation:
+Separação de Pedidos
+
+Registros:
+
+01/09 → 500 pedidos
+02/09 → 620 pedidos
+03/09 → 580 pedidos
+04/09 → 700 pedidos
+```
+
+Logo:
+
+```text
+Operation 1 ─────── N OperationalRecords
+```
+
+Estrutura:
+
+```text
+Operation
+     │
+     ├── Record 01
+     ├── Record 02
+     ├── Record 03
+     └── Record N
+```
+
+Cada registro pertence a uma única operação.
+
+---
+
+# 8. Operation → OperationalGoal
+
+Uma operação pode possuir várias metas ao longo do tempo.
+
+Exemplo:
+
+```text
+Operation: Separação de Pedidos
+
+Janeiro
+Meta: 10.000
+
+Fevereiro
+Meta: 12.000
+
+Março
+Meta: 15.000
+```
+
+Portanto:
+
+```text
+Operation 1 ─────── N OperationalGoals
+```
+
+Cada meta possui um período de vigência.
+
+Exemplo:
+
+```text
+OperationalGoal
+
+target_value
+start_date
+end_date
+```
+
+Isso permite histórico.
+
+---
+
+# 9. Organization → User
+
+Uma organização pode possuir vários usuários.
+
+```text
+Organization 1 ─────── N Users
+```
+
+Exemplo:
+
+```text
+Empresa ABC
+
+├── Administrador
+├── Gestor
+├── Analista
+└── Operador
+```
+
+Cada usuário pertence inicialmente a uma organização.
+
+---
+
+# 10. User → Unit
+
+Aqui precisamos definir o escopo do usuário.
+
+Um usuário pode trabalhar em mais de uma unidade?
+
+Em empresas reais, sim.
+
+Exemplo:
+
+```text
+Gestor Regional
+│
+├── Unidade RJ
+├── Unidade SP
+└── Unidade MG
+```
+
+Portanto, não é recomendável:
+
+```text
+User
+│
+└── unit_id
+```
+
+A melhor abordagem é:
+
+```text
+User N ─────── N Unit
+```
+
+Criando:
+
+```text
+UserUnit
+```
+
+```text
+User
+ │
+ ▼
+UserUnit
+ ▲
+ │
+Unit
+```
+
+Isso permitirá que um usuário tenha acesso a uma ou várias unidades.
+
+---
+
+# 11. User → Department
+
+A mesma situação ocorre com departamentos.
+
+Um gestor pode ter acesso a:
+
+```text
+Operações
+Logística
+Qualidade
+```
+
+Portanto, podemos futuramente utilizar:
+
+```text
+UserDepartment
+```
+
+Mas aqui precisamos evitar criar complexidade desnecessária.
+
+Minha recomendação para a primeira versão:
+
+### O usuário terá acesso através de:
+
+```text
+User
+   │
+   ├── Organization
+   │
+   ├── Roles
+   │
+   └── Units
+```
+
+Os departamentos poderão ser controlados por permissões posteriormente.
+
+Assim, inicialmente evitamos:
+
+```text
+UserDepartment
+```
+
+até existir uma necessidade real.
+
+---
+
+# 12. User ↔ Role
+
+Um usuário pode possuir mais de um papel.
+
+Exemplo:
+
+```text
+Usuário
+
+├── Gestor
+└── Analista
+```
+
+Portanto:
+
+```text
+User N ─────── N Role
+```
+
+Precisaremos da tabela associativa:
+
+```text
+UserRole
+```
+
+Estrutura:
+
+```text
+UserRole
+──────────────
+
+user_id
+role_id
+```
+
+---
+
+# 13. Role ↔ Permission
+
+Uma Role possui várias permissões.
+
+E uma permissão pode pertencer a várias Roles.
+
+Exemplo:
+
+```text
+ROLE: MANAGER
+
+Permissions:
+
+operations.read
+operations.create
+operations.update
+indicators.read
+```
+
+Portanto:
+
+```text
+Role N ─────── N Permission
+```
+
+Com:
+
+```text
+RolePermission
+```
+
+Exemplo:
+
+```text
+Role
+  │
+  ▼
+RolePermission
+  ▲
+  │
+Permission
+```
+
+---
+
+# 14. Organização completa do Core
+
+Agora temos:
+
+```text
+                    ORGANIZATION
+                         │
+          ┌──────────────┼───────────────┐
+          │              │               │
+          ▼              ▼               ▼
+        UNITS       DEPARTMENTS        USERS
+          │              │               │
+          │              │               │
+          └──────┐  ┌────┘               │
+                 ▼  ▼                    │
+            UNIT_DEPARTMENT              │
+                 │                       │
+                 ▼                       ▼
+             OPERATIONS               USER_ROLE
+                                        │
+                                        ▼
+                                      ROLES
+                                        │
+                                        ▼
+                                 ROLE_PERMISSION
+                                        │
+                                        ▼
+                                   PERMISSIONS
+```
+
+---
+
+# 15. Domínio de Operations completo
+
+```text
+UNIT_DEPARTMENT
+       │
+       │ 1
+       │
+       ▼
+   OPERATION
+       │
+       ├──────────────┐
+       │              │
+       ▼              ▼
+OPERATIONAL      OPERATIONAL
+ RECORD            GOAL
+```
+
+Esse será o primeiro domínio de negócio efetivamente implementado.
+
+---
+
+# 16. Onde entram os Indicators?
+
+Agora precisamos definir cuidadosamente esse ponto.
+
+Os indicadores serão derivados principalmente de:
+
+```text
+OperationalRecord
+```
+
+Exemplo:
+
+```text
+OperationalRecord
+│
+├── Quantity
+├── Execution Time
+└── Status
+```
+
+Podemos calcular:
+
+```text
+Productivity
+Efficiency
+Volume
+SLA
+Performance
+```
+
+Fluxo:
+
+```text
+OperationalRecord
+        │
+        ▼
+Indicator Service
+        │
+        ▼
+Calculator
+        │
+        ▼
+KPI Result
+```
+
+Inicialmente:
+
+> **O resultado do KPI não precisa ser persistido obrigatoriamente.**
+
+Ele poderá ser calculado sob demanda.
+
+---
+
+# 17. IndicatorDefinition
+
+Entretanto, para tornar a plataforma escalável, recomendo introduzir uma entidade conceitual:
+
+# `IndicatorDefinition`
+
+Ela não representa o resultado.
+
+Representa a definição do KPI.
+
+Exemplo:
+
+```text
+IndicatorDefinition
+
+Name:
+Produtividade
+
+Code:
+PRODUCTIVITY
+
+Description:
+Quantidade produzida por unidade de tempo.
+
+Unit:
+unidades/hora
+```
+
+Assim, se futuramente a empresa quiser cadastrar indicadores:
+
+```text
+Produtividade
+Eficiência
+Taxa de Retrabalho
+Taxa de Absenteísmo
+Margem Operacional
+```
+
+teremos uma estrutura preparada.
+
+Conceitualmente:
+
+```text
+IndicatorDefinition
+        │
+        │ define
+        ▼
+Indicator Calculation
+        │
+        ▼
+Indicator Result
+```
+
+Mas atenção:
+
+### Não vamos criar um sistema de fórmulas dinâmicas agora.
+
+Isso seria outro nível de complexidade.
+
+Inicialmente:
+
+```text
+IndicatorDefinition
+```
+
+servirá para catalogar indicadores.
+
+E:
+
+```text
+calculators/
+```
+
+conterá a implementação das fórmulas.
+
+---
+
+# 18. Relação entre Operation e Indicators
+
+Uma operação poderá possuir vários indicadores aplicáveis.
+
+Exemplo:
+
+```text
+Operation:
+Separação de Pedidos
+
+Indicators:
+
+├── Produtividade
+├── Eficiência
+├── SLA
+└── Volume
+```
+
+E um indicador poderá ser utilizado por várias operações.
+
+Exemplo:
+
+```text
+Productivity
+
+├── Separação
+├── Expedição
+├── Atendimento
+└── Produção
+```
+
+Portanto:
+
+```text
+Operation N ─────── N IndicatorDefinition
+```
+
+Criando:
+
+```text
+OperationIndicator
+```
+
+Estrutura:
+
+```text
+OperationIndicator
+─────────────────────
+
+operation_id
+indicator_definition_id
+
+is_active
+```
+
+Isso cria uma arquitetura muito interessante.
+
+---
+
+# 19. Modelo conceitual consolidado
+
+Agora temos uma visão mais madura:
+
+```text
+┌──────────────────┐
+│   ORGANIZATION   │
+└────────┬─────────┘
+         │
+   ┌─────┼──────────────┐
+   │     │              │
+   ▼     ▼              ▼
+ UNITS DEPARTMENTS     USERS
+   │     │              │
+   └──┐ ┌┘              │
+      ▼ ▼               ▼
+UNIT_DEPARTMENT     USER_ROLE
+      │                 │
+      ▼                 ▼
+  OPERATIONS          ROLES
+      │                 │
+      │              ROLE_PERMISSION
+      │                 │
+ ┌────┼─────┐           ▼
+ ▼    ▼     ▼       PERMISSIONS
+RECORD GOAL INDICATOR
+             │
+             ▼
+    INDICATOR_DEFINITION
+```
+
+Uma representação mais precisa dos indicadores:
+
+```text
+OPERATION
+    │
+    │ N
+    ▼
+OPERATION_INDICATOR
+    ▲
+    │ N
+INDICATOR_DEFINITION
+```
+
+---
+
+# 20. Regras de negócio identificadas
+
+Vamos formalizar algumas regras fundamentais.
+
+## RN-001 — Organização
+
+Uma organização pode possuir várias unidades, departamentos e usuários.
+
+---
+
+## RN-002 — Unidade
+
+Uma unidade pertence obrigatoriamente a uma única organização.
+
+---
+
+## RN-003 — Departamento
+
+Um departamento pertence a uma organização.
+
+O mesmo departamento pode estar associado a diversas unidades.
+
+---
+
+## RN-004 — UnitDepartment
+
+Não pode existir duplicidade de associação entre unidade e departamento.
+
+```text
+UNIQUE(unit_id, department_id)
+```
+
+---
+
+## RN-005 — Operação
+
+Uma operação deve pertencer a uma associação válida entre:
+
+```text
+Unit + Department
+```
+
+---
+
+## RN-006 — Registro Operacional
+
+Todo registro operacional deve pertencer a uma operação existente.
+
+---
+
+## RN-007 — Meta Operacional
+
+Uma meta deve possuir período de vigência.
+
+```text
+start_date
+end_date
+```
+
+---
+
+## RN-008 — Usuário
+
+Um usuário pertence a uma organização.
+
+O e-mail deverá ser único no contexto definido pela estratégia de autenticação.
+
+Minha recomendação:
+
+```text
+UNIQUE(organization_id, email)
+```
+
+Isso permite, tecnicamente, que o mesmo e-mail exista em organizações diferentes, caso o produto evolua para um SaaS multiempresa.
+
+---
+
+## RN-009 — Usuário e Unidades
+
+Um usuário poderá possuir acesso a uma ou várias unidades.
+
+Relacionamento:
+
+```text
+User N:N Unit
+```
+
+---
+
+## RN-010 — Roles
+
+Um usuário poderá possuir múltiplos papéis.
+
+---
+
+## RN-011 — Permissions
+
+Uma Role poderá possuir diversas permissões.
+
+---
+
+## RN-012 — Indicators
+
+Uma operação poderá possuir diversos indicadores configurados.
+
+Um indicador poderá ser utilizado por várias operações.
+
+---
+
+# 21. Cardinalidades consolidadas
+
+| Relacionamento                  | Cardinalidade |
+| ------------------------------- | ------------- |
+| Organization → Unit             | 1:N           |
+| Organization → Department       | 1:N           |
+| Unit ↔ Department               | N:N           |
+| UnitDepartment → Operation      | 1:N           |
+| Organization → User             | 1:N           |
+| User ↔ Unit                     | N:N           |
+| User ↔ Role                     | N:N           |
+| Role ↔ Permission               | N:N           |
+| Operation → OperationalRecord   | 1:N           |
+| Operation → OperationalGoal     | 1:N           |
+| Operation ↔ IndicatorDefinition | N:N           |
+
+---
+
+# 📌 Decisão arquitetural importante
+
+A modelagem agora possui uma característica fundamental:
+
+## O sistema não está amarrado a um único setor.
+
+Uma operação pode representar:
+
+### Logística
+
+```text
+Separação
+Expedição
+Entrega
+```
+
+### RH
+
+```text
+Processamento de admissões
+Tempo de contratação
+Treinamentos
+```
+
+### Financeiro
+
+```text
+Processamento de pagamentos
+Conciliação
+Faturamento
+```
+
+### Comercial
+
+```text
+Atendimento de propostas
+Conversão de vendas
+Follow-up
+```
+
+Isso confirma uma decisão importante tomada anteriormente:
+
+> **O OpsMetrics será uma plataforma corporativa orientada a métricas, e não uma API exclusiva para um segmento específico.**
+
+---
+
+# 🏁 Conclusão da etapa 3.2
+
+Agora temos:
+
+* ✅ Entidades identificadas;
+* ✅ Relacionamentos definidos;
+* ✅ Cardinalidades estabelecidas;
+* ✅ Entidades associativas identificadas;
+* ✅ Regras de negócio iniciais;
+* ✅ Estrutura multiempresa;
+* ✅ Modelo genérico para departamentos;
+* ✅ Base conceitual para indicadores.
+
+---
+
+# 🚀 Próxima etapa: 3.3 — Modelo Conceitual de Dados
+
+No próximo passo vamos consolidar tudo em um **modelo conceitual formal**, utilizando uma visão semelhante a um DER de alto nível.
+
+Vamos organizar visualmente:
+
+```text
+ORGANIZATION
+     │
+     ├── UNIT
+     │
+     ├── DEPARTMENT
+     │
+     └── USER
+
+UNIT + DEPARTMENT
+        │
+        ▼
+     OPERATION
+        │
+   ┌────┼─────┐
+   ▼    ▼     ▼
+RECORD GOAL INDICATOR
+```
