@@ -1,0 +1,768 @@
+Perfeito. Vamos avançar para a consolidação formal da modelagem.
+
+# 🚀 OpsMetrics API — FASE 3
+
+# 3.3 — Modelo Conceitual de Dados
+
+Nesta etapa ainda **não vamos pensar em PostgreSQL, tipos de dados ou código SQL**.
+
+O objetivo é responder:
+
+> Quais entidades existem no negócio e como elas se relacionam?
+
+O modelo conceitual será a ponte entre os requisitos de negócio e a futura implementação técnica.
+
+---
+
+# 1. Visão macro do modelo
+
+O OpsMetrics possui três grandes domínios:
+
+```text
+┌─────────────────────────────────────────────┐
+│                  OPSMETRICS                 │
+├─────────────────────────────────────────────┤
+│                                             │
+│  CORE CORPORATIVO                           │
+│  ├── Organização                            │
+│  ├── Unidades                               │
+│  ├── Departamentos                          │
+│  └── Usuários                               │
+│                                             │
+│  CONTROLE DE ACESSO                         │
+│  ├── Perfis                                 │
+│  └── Permissões                             │
+│                                             │
+│  OPERAÇÕES                                  │
+│  ├── Operações                              │
+│  ├── Registros Operacionais                 │
+│  └── Metas                                  │
+│                                             │
+│  INDICADORES                                │
+│  └── Definições de Indicadores              │
+│                                             │
+└─────────────────────────────────────────────┘
+```
+
+---
+
+# 2. Modelo Conceitual — Estrutura Corporativa
+
+A base de todo o sistema será a Organização.
+
+```text
+                         ORGANIZATION
+                              │
+              ┌───────────────┼────────────────┐
+              │               │                │
+              │               │                │
+              ▼               ▼                ▼
+            UNIT         DEPARTMENT          USER
+```
+
+Conceitualmente:
+
+* Uma **Organization** representa uma empresa cliente.
+* Uma Organization possui várias **Units**.
+* Uma Organization possui vários **Departments**.
+* Uma Organization possui vários **Users**.
+
+---
+
+# 3. Relação entre Unidade e Departamento
+
+Uma unidade pode possuir diversos departamentos.
+
+Um departamento pode estar presente em diversas unidades.
+
+Portanto:
+
+```text
+UNIT                         DEPARTMENT
+ │                               │
+ │                               │
+ └───────────┐       ┌───────────┘
+             ▼       ▼
+          UNIT_DEPARTMENT
+```
+
+Essa entidade representa a estrutura organizacional operacional.
+
+Exemplo:
+
+```text
+EMPRESA ABC
+
+├── MATRIZ
+│   ├── Financeiro
+│   ├── RH
+│   └── Comercial
+│
+├── FILIAL RJ
+│   ├── Operações
+│   ├── Financeiro
+│   └── Comercial
+│
+└── CD SP
+    ├── Operações
+    └── Logística
+```
+
+No modelo conceitual:
+
+```text
+UNIT N ─────── N DEPARTMENT
+```
+
+Materializado através de:
+
+```text
+UNIT_DEPARTMENT
+```
+
+---
+
+# 4. Modelo Conceitual do domínio Operations
+
+Agora chegamos ao núcleo funcional da primeira entrega.
+
+```text
+UNIT_DEPARTMENT
+       │
+       │
+       ▼
+   OPERATION
+       │
+       │
+ ┌─────┴─────────┐
+ │               │
+ ▼               ▼
+OPERATIONAL   OPERATIONAL
+ RECORD         GOAL
+```
+
+A interpretação é:
+
+### UnitDepartment
+
+Define onde aquela atividade acontece.
+
+Exemplo:
+
+```text
+Unidade:
+Centro de Distribuição RJ
+
+Departamento:
+Operações
+```
+
+### Operation
+
+Define o processo mensurável.
+
+Exemplo:
+
+```text
+Separação de Pedidos
+```
+
+### OperationalRecord
+
+Armazena os eventos ou dados operacionais.
+
+Exemplo:
+
+```text
+Data: 02/09/2026
+Quantidade: 850
+Tempo: 480 minutos
+Status: Concluído
+```
+
+### OperationalGoal
+
+Define a meta esperada para aquela operação.
+
+Exemplo:
+
+```text
+Meta mensal: 15.000 pedidos
+```
+
+---
+
+# 5. Modelo Conceitual de Indicadores
+
+Os indicadores não existem isoladamente.
+
+Eles precisam estar associados às operações.
+
+```text
+                    OPERATION
+                        │
+                        │ N
+                        │
+                OPERATION_INDICATOR
+                        │
+                        │ N
+                        ▼
+              INDICATOR_DEFINITION
+```
+
+Exemplo:
+
+```text
+OPERATION
+
+Separação de Pedidos
+
+│
+├── Produtividade
+├── Eficiência
+├── SLA
+└── Volume Processado
+```
+
+Ao mesmo tempo:
+
+```text
+INDICATOR
+
+Produtividade
+
+│
+├── Separação
+├── Expedição
+├── Atendimento
+└── Produção
+```
+
+Por isso temos uma relação N:N.
+
+---
+
+# 6. Modelo Conceitual de Usuários e Acessos
+
+Agora o domínio de segurança.
+
+```text
+ORGANIZATION
+      │
+      │ 1:N
+      ▼
+    USER
+      │
+      │ N:N
+      ▼
+  USER_ROLE
+      │
+      ▼
+    ROLE
+      │
+      │ N:N
+      ▼
+ROLE_PERMISSION
+      │
+      ▼
+  PERMISSION
+```
+
+Exemplo:
+
+```text
+USUÁRIO
+
+Daniel
+
+│
+├── ADMIN
+└── MANAGER
+```
+
+A Role define um conjunto de permissões:
+
+```text
+ROLE: MANAGER
+
+├── operations.read
+├── operations.create
+├── indicators.read
+└── reports.read
+```
+
+---
+
+# 7. Controle de acesso às unidades
+
+Também teremos:
+
+```text
+USER
+ │
+ │ N
+ │
+ ▼
+USER_UNIT
+ │
+ │ N
+ │
+ ▼
+UNIT
+```
+
+Isso permitirá cenários corporativos reais.
+
+Exemplo:
+
+```text
+GESTOR REGIONAL
+
+Acesso:
+
+├── Unidade RJ
+├── Unidade SP
+└── Unidade MG
+```
+
+Enquanto outro usuário pode ter acesso apenas a:
+
+```text
+Unidade RJ
+```
+
+---
+
+# 8. Modelo Conceitual Consolidado
+
+Agora podemos visualizar todo o ecossistema.
+
+```text
+                                  ┌──────────────────┐
+                                  │   ORGANIZATION   │
+                                  └────────┬─────────┘
+                                           │
+                    ┌──────────────────────┼──────────────────────┐
+                    │                      │                      │
+                    ▼                      ▼                      ▼
+              ┌──────────┐          ┌──────────────┐        ┌──────────┐
+              │   UNIT   │          │  DEPARTMENT  │        │   USER   │
+              └────┬─────┘          └──────┬───────┘        └────┬─────┘
+                   │                       │                     │
+                   │                       │                     │
+                   └───────────┐   ┌───────┘                     │
+                               ▼   ▼                             │
+                         ┌────────────────┐                      │
+                         │ UNIT_DEPARTMENT│                      │
+                         └────────┬───────┘                      │
+                                  │                              │
+                                  ▼                              ▼
+                            ┌───────────┐                  ┌───────────┐
+                            │ OPERATION │                  │ USER_ROLE │
+                            └─────┬─────┘                  └─────┬─────┘
+                                  │                              │
+                  ┌───────────────┼──────────────┐               ▼
+                  │               │              │          ┌────────┐
+                  ▼               ▼              ▼          │  ROLE  │
+          ┌──────────────┐ ┌────────────┐ ┌────────────┐     └────┬───┘
+          │ OPERATIONAL  │ │ OPERATIONAL│ │ OPERATION  │          │
+          │    RECORD    │ │    GOAL    │ │ INDICATOR  │          ▼
+          └──────────────┘ └────────────┘ └──────┬─────┘  ┌─────────────────┐
+                                                  │        │ ROLE_PERMISSION │
+                                                  ▼        └────────┬────────┘
+                                       ┌──────────────────────┐     │
+                                       │ INDICATOR_DEFINITION │     ▼
+                                       └──────────────────────┘ ┌────────────┐
+                                                                │ PERMISSION │
+                                                                └────────────┘
+
+
+                   USER
+                     │
+                     ▼
+                USER_UNIT
+                     │
+                     ▼
+                    UNIT
+```
+
+---
+
+# 9. Entidades do modelo conceitual
+
+Vamos formalizar a lista.
+
+## CORE ORGANIZACIONAL
+
+| Entidade       | Responsabilidade                        |
+| -------------- | --------------------------------------- |
+| Organization   | Representar a empresa                   |
+| Unit           | Representar unidades, filiais ou locais |
+| Department     | Representar departamentos corporativos  |
+| UnitDepartment | Associar departamentos às unidades      |
+
+---
+
+## IDENTIDADE E ACESSO
+
+| Entidade       | Responsabilidade             |
+| -------------- | ---------------------------- |
+| User           | Representar usuários         |
+| Role           | Representar perfis           |
+| Permission     | Representar permissões       |
+| UserRole       | Associar usuários e perfis   |
+| RolePermission | Associar perfis e permissões |
+| UserUnit       | Controlar acesso às unidades |
+
+---
+
+## OPERATIONS
+
+| Entidade           | Responsabilidade                  |
+| ------------------ | --------------------------------- |
+| Operation          | Representar processo mensurável   |
+| OperationalRecord  | Registrar dados operacionais      |
+| OperationalGoal    | Definir metas                     |
+| OperationIndicator | Associar indicadores às operações |
+
+---
+
+## INDICATORS
+
+| Entidade            | Responsabilidade             |
+| ------------------- | ---------------------------- |
+| IndicatorDefinition | Catalogar definições de KPIs |
+
+---
+
+# 10. Um refinamento arquitetural importante
+
+Agora precisamos observar algo.
+
+Temos atualmente:
+
+```text
+OperationalRecord
+```
+
+com campos como:
+
+```text
+quantity
+execution_time
+status
+```
+
+Isso funciona muito bem para o módulo inicial.
+
+Porém, o OpsMetrics pretende futuramente atender:
+
+* RH;
+* Financeiro;
+* Comercial;
+* Compras;
+* Logística;
+* Qualidade;
+* Tecnologia;
+* Gestão.
+
+Cada área poderá gerar dados completamente diferentes.
+
+Por exemplo:
+
+### RH
+
+```text
+admissions
+terminations
+absenteeism
+headcount
+```
+
+### Financeiro
+
+```text
+revenue
+expenses
+cash_flow
+margin
+```
+
+### Comercial
+
+```text
+leads
+proposals
+sales
+conversion_rate
+```
+
+Portanto, surge uma decisão arquitetural importante:
+
+> Devemos criar uma tabela genérica de registros para todos os departamentos?
+
+Minha recomendação é:
+
+# Não.
+
+Não devemos tentar criar uma tabela universal como:
+
+```text
+records
+
+field_1
+field_2
+field_3
+field_4
+...
+```
+
+Isso levaria a uma estrutura frágil.
+
+Também não recomendo transformar tudo em:
+
+```json
+{
+  "any_data": "anything"
+}
+```
+
+como solução principal.
+
+---
+
+# 11. Estratégia recomendada para expansão
+
+A arquitetura será:
+
+```text
+CORE
+ │
+ ├── ORGANIZATION
+ ├── UNIT
+ ├── DEPARTMENT
+ └── ACCESS
+       │
+       ▼
+DOMAIN MODULES
+       │
+       ├── OPERATIONS
+       │
+       ├── HR
+       │
+       ├── FINANCIAL
+       │
+       ├── COMMERCIAL
+       │
+       ├── PROCUREMENT
+       │
+       └── LOGISTICS
+```
+
+Cada módulo poderá possuir suas próprias entidades.
+
+Exemplo futuro:
+
+```text
+modules/
+│
+├── operations/
+│   ├── Operation
+│   ├── OperationalRecord
+│   └── OperationalGoal
+│
+├── hr/
+│   ├── Employee
+│   ├── Absence
+│   └── Training
+│
+├── financial/
+│   ├── Revenue
+│   ├── Expense
+│   └── CashFlow
+│
+└── commercial/
+    ├── Lead
+    ├── Opportunity
+    └── Sale
+```
+
+Essa é uma decisão muito mais escalável.
+
+O Core permanece estável.
+
+Os módulos evoluem independentemente.
+
+---
+
+# 12. O papel do modelo atual
+
+Portanto, o modelo que estamos criando agora não representa o banco inteiro que existirá no futuro.
+
+Ele representa:
+
+> **O Core da plataforma + o primeiro módulo de negócio: Operations.**
+
+Visualmente:
+
+```text
+                    OPSMETRICS
+                         │
+             ┌───────────┴───────────┐
+             │                       │
+             ▼                       ▼
+          CORE                  OPERATIONS
+             │                       │
+             │                       │
+             │                  PRIMEIRO
+             │                   MÓDULO
+             │
+             ▼
+      FUTUROS MÓDULOS
+```
+
+Isso está alinhado com a estratégia que definimos:
+
+> Implementar departamento por departamento, com entregas incrementais.
+
+---
+
+# 13. Regras conceituais consolidadas
+
+Vamos registrar algumas regras adicionais.
+
+### RN-013 — Isolamento Organizacional
+
+Todos os dados de negócio devem estar associados direta ou indiretamente a uma Organization.
+
+Isso será fundamental para o modelo multiempresa.
+
+---
+
+### RN-014 — Contexto Organizacional
+
+Nenhuma Operation pode existir sem estar contextualizada em:
+
+```text
+Organization
+    ↓
+Unit
+    ↓
+Department
+```
+
+Na implementação:
+
+```text
+Operation
+    ↓
+UnitDepartment
+```
+
+---
+
+### RN-015 — Modularidade
+
+Entidades específicas de um departamento não devem ser utilizadas como entidades genéricas para outros departamentos.
+
+Exemplo:
+
+```text
+OperationalRecord
+```
+
+não será utilizado futuramente para armazenar:
+
+```text
+Financeiro
+RH
+Comercial
+```
+
+Cada domínio terá seu modelo próprio.
+
+---
+
+### RN-016 — Indicadores
+
+Indicadores devem possuir uma definição independente do cálculo.
+
+```text
+DEFINITION
+     ≠
+CALCULATION
+```
+
+A definição representa o conceito.
+
+O cálculo representa a implementação.
+
+Exemplo:
+
+```text
+Definition:
+Produtividade
+
+Calculation:
+quantidade / tempo
+```
+
+Essa separação permitirá evolução futura.
+
+---
+
+# 14. Resultado da etapa 3.3
+
+Concluímos o **Modelo Conceitual de Dados**.
+
+Agora temos:
+
+* ✅ visão completa das entidades;
+* ✅ domínios separados;
+* ✅ relacionamentos organizacionais;
+* ✅ controle de acesso;
+* ✅ primeiro módulo de negócio;
+* ✅ estrutura conceitual de indicadores;
+* ✅ preparação para expansão modular;
+* ✅ estratégia multiempresa;
+* ✅ isolamento lógico de dados.
+
+---
+
+# 🚀 Próxima etapa — 3.4
+
+Agora entraremos em uma fase mais técnica:
+
+# **MODELO LÓGICO DE DADOS**
+
+Vamos transformar cada entidade conceitual em uma estrutura lógica.
+
+Exemplo:
+
+```text
+ORGANIZATION
+
+PK id
+
+name
+legal_name
+tax_id
+status
+
+created_at
+updated_at
+```
+
+E começaremos a definir:
+
+* Chaves primárias;
+* Chaves estrangeiras;
+* Campos;
+* Constraints;
+* Unicidade;
+* Campos obrigatórios;
+* Estratégia de auditoria;
+* Soft Delete;
+* Convenção de nomenclatura.
+
+Ao final da **3.4**, teremos praticamente o blueprint do banco de dados antes de escrever qualquer SQL.
