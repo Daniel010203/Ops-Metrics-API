@@ -1,0 +1,1479 @@
+Perfeito. Agora vamos transformar o modelo conceitual em uma especificação técnica estruturada.
+
+# 🚀 OpsMetrics API — FASE 3
+
+# 3.4 — Modelo Lógico de Dados
+
+Nesta etapa definiremos:
+
+* entidades e atributos;
+* chaves primárias;
+* chaves estrangeiras;
+* obrigatoriedade;
+* unicidade;
+* regras de integridade;
+* auditoria;
+* estratégia de exclusão;
+* convenções de nomenclatura.
+
+O objetivo é chegar a um modelo que possa ser implementado posteriormente em:
+
+```text
+PostgreSQL
+    ↓
+SQLAlchemy
+    ↓
+Alembic
+```
+
+---
+
+# 1. Convenções do Modelo Lógico
+
+Antes das tabelas, precisamos padronizar algumas decisões.
+
+## 1.1 Nomenclatura
+
+Minha recomendação:
+
+### Banco e tabelas
+
+```text
+snake_case
+```
+
+Exemplo:
+
+```text
+organizations
+operational_records
+indicator_definitions
+```
+
+### Colunas
+
+```text
+snake_case
+```
+
+Exemplo:
+
+```text
+organization_id
+created_at
+updated_at
+```
+
+### Entidades Python
+
+```text
+PascalCase
+```
+
+Exemplo:
+
+```python
+Organization
+OperationalRecord
+IndicatorDefinition
+```
+
+---
+
+# 2. Estratégia de Chaves Primárias
+
+Vamos utilizar:
+
+```text
+UUID
+```
+
+Exemplo conceitual:
+
+```text
+id
+UUID
+PRIMARY KEY
+```
+
+## Por que UUID?
+
+Para um projeto como o OpsMetrics, existem vantagens importantes:
+
+* melhor preparação para ambiente distribuído;
+* evita IDs previsíveis;
+* facilita integrações futuras;
+* adequado para arquitetura multiempresa;
+* facilita sincronização entre serviços;
+* evita colisões em cenários distribuídos.
+
+Exemplo:
+
+```text
+550e8400-e29b-41d4-a716-446655440000
+```
+
+Para PostgreSQL, posteriormente poderemos utilizar:
+
+```sql
+gen_random_uuid()
+```
+
+---
+
+# 3. Estratégia de Auditoria
+
+As principais entidades possuirão:
+
+```text
+created_at
+updated_at
+```
+
+E, futuramente, quando necessário:
+
+```text
+created_by
+updated_by
+```
+
+Para a primeira implementação:
+
+```text
+created_at
+updated_at
+```
+
+serão suficientes.
+
+---
+
+# 4. Estratégia de Exclusão
+
+Minha recomendação inicial:
+
+## Não utilizar Soft Delete em todas as tabelas automaticamente.
+
+Vamos evitar criar indiscriminadamente:
+
+```text
+deleted_at
+deleted_by
+is_deleted
+```
+
+em todas as entidades.
+
+Isso adiciona complexidade desnecessária.
+
+Utilizaremos três estratégias conforme o tipo de dado:
+
+| Tipo                | Estratégia            |
+| ------------------- | --------------------- |
+| Dados mestres       | Inativação            |
+| Dados transacionais | Restrição de exclusão |
+| Dados temporários   | Exclusão física       |
+
+Exemplo:
+
+```text
+Organization
+status = inactive
+```
+
+```text
+Operation
+status = inactive
+```
+
+Já registros históricos:
+
+```text
+OperationalRecord
+```
+
+não devem ser removidos indiscriminadamente.
+
+---
+
+# 5. Estratégia de Status
+
+Não vamos utilizar `status` livre em formato textual sem controle.
+
+Exemplo ruim:
+
+```text
+status = "ativo"
+status = "Ativo"
+status = "ACTIVE"
+status = "ativo "
+```
+
+Utilizaremos enums.
+
+Exemplo:
+
+```text
+Status:
+
+ACTIVE
+INACTIVE
+```
+
+Isso poderá ser implementado através de:
+
+```text
+PostgreSQL ENUM
+```
+
+ou:
+
+```text
+VARCHAR + CHECK CONSTRAINT
+```
+
+### Decisão provisória
+
+Para a primeira versão:
+
+> Utilizaremos `VARCHAR + CHECK Constraint` quando houver necessidade de status.
+
+Isso reduz o acoplamento do banco com enums físicos e facilita evolução por migrations.
+
+---
+
+# 6. CORE — ORGANIZATIONS
+
+A entidade raiz do sistema.
+
+## Tabela lógica
+
+```text
+organizations
+```
+
+### Estrutura
+
+| Campo      | Tipo lógico  | Obrigatório | Regra              |
+| ---------- | ------------ | ----------- | ------------------ |
+| id         | UUID         | Sim         | PK                 |
+| name       | VARCHAR(150) | Sim         | Nome comercial     |
+| legal_name | VARCHAR(200) | Não         | Razão social       |
+| tax_id     | VARCHAR(30)  | Não         | Documento fiscal   |
+| status     | VARCHAR(20)  | Sim         | ACTIVE / INACTIVE  |
+| created_at | TIMESTAMP TZ | Sim         | Data de criação    |
+| updated_at | TIMESTAMP TZ | Sim         | Última atualização |
+
+### Constraints
+
+```text
+PK(id)
+UNIQUE(tax_id)
+CHECK(status IN ('ACTIVE', 'INACTIVE'))
+```
+
+---
+
+# 7. CORE — UNITS
+
+Representa filiais, matrizes, CDs ou outras unidades organizacionais.
+
+```text
+units
+```
+
+| Campo           | Tipo lógico  | Obrigatório |
+| --------------- | ------------ | ----------- |
+| id              | UUID         | Sim         |
+| organization_id | UUID         | Sim         |
+| name            | VARCHAR(150) | Sim         |
+| code            | VARCHAR(50)  | Sim         |
+| city            | VARCHAR(100) | Não         |
+| state           | VARCHAR(100) | Não         |
+| status          | VARCHAR(20)  | Sim         |
+| created_at      | TIMESTAMP TZ | Sim         |
+| updated_at      | TIMESTAMP TZ | Sim         |
+
+### Relacionamento
+
+```text
+Organization 1:N Unit
+```
+
+### Constraints
+
+```text
+PK(id)
+
+FK(organization_id)
+→ organizations(id)
+
+UNIQUE(organization_id, code)
+
+CHECK(status IN ('ACTIVE', 'INACTIVE'))
+```
+
+A combinação:
+
+```text
+organization_id + code
+```
+
+permite:
+
+```text
+Empresa A → MATRIZ
+Empresa B → MATRIZ
+```
+
+sem conflito.
+
+---
+
+# 8. CORE — DEPARTMENTS
+
+Representa departamentos corporativos.
+
+```text
+departments
+```
+
+| Campo           | Tipo lógico  | Obrigatório |
+| --------------- | ------------ | ----------- |
+| id              | UUID         | Sim         |
+| organization_id | UUID         | Sim         |
+| name            | VARCHAR(100) | Sim         |
+| code            | VARCHAR(50)  | Sim         |
+| description     | TEXT         | Não         |
+| status          | VARCHAR(20)  | Sim         |
+| created_at      | TIMESTAMP TZ | Sim         |
+| updated_at      | TIMESTAMP TZ | Sim         |
+
+### Constraints
+
+```text
+PK(id)
+
+FK(organization_id)
+→ organizations(id)
+
+UNIQUE(organization_id, code)
+
+CHECK(status IN ('ACTIVE', 'INACTIVE'))
+```
+
+---
+
+# 9. CORE — UNIT_DEPARTMENTS
+
+Tabela associativa.
+
+```text
+unit_departments
+```
+
+| Campo         | Tipo lógico  | Obrigatório |
+| ------------- | ------------ | ----------- |
+| id            | UUID         | Sim         |
+| unit_id       | UUID         | Sim         |
+| department_id | UUID         | Sim         |
+| status        | VARCHAR(20)  | Sim         |
+| created_at    | TIMESTAMP TZ | Sim         |
+| updated_at    | TIMESTAMP TZ | Sim         |
+
+### Constraints
+
+```text
+PK(id)
+
+FK(unit_id)
+→ units(id)
+
+FK(department_id)
+→ departments(id)
+
+UNIQUE(unit_id, department_id)
+```
+
+### Regra importante
+
+Devemos garantir posteriormente, no nível da aplicação, que:
+
+```text
+Unit.organization_id
+=
+Department.organization_id
+```
+
+Ou seja, não podemos associar:
+
+```text
+Unidade Empresa A
+```
+
+com:
+
+```text
+Departamento Empresa B
+```
+
+Esse é um ponto crítico em sistemas multiempresa.
+
+---
+
+# 10. CORE — USERS
+
+```text
+users
+```
+
+| Campo           | Tipo lógico  | Obrigatório |
+| --------------- | ------------ | ----------- |
+| id              | UUID         | Sim         |
+| organization_id | UUID         | Sim         |
+| name            | VARCHAR(150) | Sim         |
+| email           | VARCHAR(255) | Sim         |
+| password_hash   | VARCHAR(255) | Sim         |
+| is_active       | BOOLEAN      | Sim         |
+| last_login_at   | TIMESTAMP TZ | Não         |
+| created_at      | TIMESTAMP TZ | Sim         |
+| updated_at      | TIMESTAMP TZ | Sim         |
+
+### Constraints
+
+```text
+PK(id)
+
+FK(organization_id)
+→ organizations(id)
+
+UNIQUE(organization_id, email)
+```
+
+---
+
+# 11. CORE — ROLES
+
+Aqui existe uma decisão importante.
+
+As Roles devem ser globais ou específicas por organização?
+
+Minha recomendação inicial:
+
+# Roles específicas por organização.
+
+Exemplo:
+
+```text
+Empresa A
+
+ADMIN
+MANAGER
+ANALYST
+```
+
+Outra empresa poderá possuir:
+
+```text
+ADMIN
+SUPERVISOR
+OPERATOR
+```
+
+Portanto:
+
+```text
+roles
+```
+
+| Campo           | Tipo lógico  |
+| --------------- | ------------ |
+| id              | UUID         |
+| organization_id | UUID         |
+| name            | VARCHAR(100) |
+| code            | VARCHAR(50)  |
+| description     | TEXT         |
+| created_at      | TIMESTAMP TZ |
+| updated_at      | TIMESTAMP TZ |
+
+### Constraint
+
+```text
+UNIQUE(organization_id, code)
+```
+
+---
+
+# 12. CORE — PERMISSIONS
+
+Permissões serão globais no sistema.
+
+Exemplo:
+
+```text
+operations.read
+operations.create
+operations.update
+operations.delete
+
+indicators.read
+```
+
+Tabela:
+
+```text
+permissions
+```
+
+| Campo       | Tipo lógico  |
+| ----------- | ------------ |
+| id          | UUID         |
+| name        | VARCHAR(100) |
+| code        | VARCHAR(100) |
+| description | TEXT         |
+| created_at  | TIMESTAMP TZ |
+
+### Constraint
+
+```text
+UNIQUE(code)
+```
+
+---
+
+# 13. CORE — USER_ROLES
+
+Tabela associativa.
+
+```text
+user_roles
+```
+
+| Campo      | Tipo lógico  |
+| ---------- | ------------ |
+| user_id    | UUID         |
+| role_id    | UUID         |
+| created_at | TIMESTAMP TZ |
+
+### Constraints
+
+```text
+PK(user_id, role_id)
+
+FK(user_id)
+→ users(id)
+
+FK(role_id)
+→ roles(id)
+```
+
+Aqui não precisamos necessariamente criar um UUID adicional.
+
+A chave composta é adequada.
+
+---
+
+# 14. CORE — ROLE_PERMISSIONS
+
+```text
+role_permissions
+```
+
+| Campo         | Tipo lógico  |
+| ------------- | ------------ |
+| role_id       | UUID         |
+| permission_id | UUID         |
+| created_at    | TIMESTAMP TZ |
+
+### Constraints
+
+```text
+PK(role_id, permission_id)
+
+FK(role_id)
+→ roles(id)
+
+FK(permission_id)
+→ permissions(id)
+```
+
+---
+
+# 15. CORE — USER_UNITS
+
+Controla o acesso dos usuários às unidades.
+
+```text
+user_units
+```
+
+| Campo      | Tipo lógico  |
+| ---------- | ------------ |
+| user_id    | UUID         |
+| unit_id    | UUID         |
+| created_at | TIMESTAMP TZ |
+
+### Constraints
+
+```text
+PK(user_id, unit_id)
+
+FK(user_id)
+→ users(id)
+
+FK(unit_id)
+→ units(id)
+```
+
+Regra adicional:
+
+O usuário e a unidade devem pertencer à mesma organização.
+
+---
+
+# 16. OPERATIONS — OPERATIONS
+
+Agora chegamos ao primeiro módulo de negócio.
+
+Tabela:
+
+```text
+operations
+```
+
+| Campo              | Tipo lógico  | Obrigatório |
+| ------------------ | ------------ | ----------- |
+| id                 | UUID         | Sim         |
+| unit_department_id | UUID         | Sim         |
+| name               | VARCHAR(150) | Sim         |
+| code               | VARCHAR(50)  | Sim         |
+| description        | TEXT         | Não         |
+| status             | VARCHAR(20)  | Sim         |
+| created_at         | TIMESTAMP TZ | Sim         |
+| updated_at         | TIMESTAMP TZ | Sim         |
+
+### Constraints
+
+```text
+PK(id)
+
+FK(unit_department_id)
+→ unit_departments(id)
+
+CHECK(status IN ('ACTIVE', 'INACTIVE'))
+```
+
+Sobre o `code`, recomendo:
+
+```text
+UNIQUE(unit_department_id, code)
+```
+
+Exemplo:
+
+```text
+Operações RJ
+→ PICKING
+
+Operações SP
+→ PICKING
+```
+
+Isso pode existir porque são contextos diferentes.
+
+---
+
+# 17. OPERATIONS — OPERATIONAL_RECORDS
+
+Esta será uma das tabelas mais importantes.
+
+```text
+operational_records
+```
+
+| Campo          | Tipo lógico   | Obrigatório |
+| -------------- | ------------- | ----------- |
+| id             | UUID          | Sim         |
+| operation_id   | UUID          | Sim         |
+| reference_date | DATE          | Sim         |
+| quantity       | NUMERIC(15,2) | Sim         |
+| execution_time | NUMERIC(15,2) | Não         |
+| status         | VARCHAR(20)   | Sim         |
+| created_at     | TIMESTAMP TZ  | Sim         |
+| updated_at     | TIMESTAMP TZ  | Sim         |
+
+### Constraints
+
+```text
+PK(id)
+
+FK(operation_id)
+→ operations(id)
+```
+
+Status inicial:
+
+```text
+PENDING
+IN_PROGRESS
+COMPLETED
+CANCELLED
+```
+
+Constraint:
+
+```text
+CHECK (
+    status IN (
+        'PENDING',
+        'IN_PROGRESS',
+        'COMPLETED',
+        'CANCELLED'
+    )
+)
+```
+
+---
+
+# 18. Um refinamento importante sobre OperationalRecord
+
+Precisamos evitar assumir que um registro operacional será sempre diário.
+
+Por isso usamos:
+
+```text
+reference_date
+```
+
+Mas futuramente poderemos evoluir para:
+
+```text
+started_at
+finished_at
+```
+
+Exemplo:
+
+```text
+Operação iniciou:
+09:00
+
+Operação terminou:
+11:30
+```
+
+Para a Release inicial, proponho manter:
+
+```text
+reference_date
+execution_time
+```
+
+Porém, deixaremos o modelo preparado para evolução.
+
+---
+
+# 19. OPERATIONS — OPERATIONAL_GOALS
+
+Tabela:
+
+```text
+operational_goals
+```
+
+| Campo        | Tipo lógico   |
+| ------------ | ------------- |
+| id           | UUID          |
+| operation_id | UUID          |
+| target_value | NUMERIC(15,2) |
+| period_type  | VARCHAR(20)   |
+| start_date   | DATE          |
+| end_date     | DATE          |
+| status       | VARCHAR(20)   |
+| created_at   | TIMESTAMP TZ  |
+| updated_at   | TIMESTAMP TZ  |
+
+### Period Type
+
+```text
+DAILY
+WEEKLY
+MONTHLY
+QUARTERLY
+YEARLY
+CUSTOM
+```
+
+Constraint:
+
+```text
+CHECK (
+    period_type IN (
+        'DAILY',
+        'WEEKLY',
+        'MONTHLY',
+        'QUARTERLY',
+        'YEARLY',
+        'CUSTOM'
+    )
+)
+```
+
+Também teremos:
+
+```text
+CHECK(start_date <= end_date)
+```
+
+---
+
+# 20. INDICATORS — INDICATOR_DEFINITIONS
+
+Tabela:
+
+```text
+indicator_definitions
+```
+
+| Campo           | Tipo lógico  |
+| --------------- | ------------ |
+| id              | UUID         |
+| organization_id | UUID         |
+| name            | VARCHAR(150) |
+| code            | VARCHAR(100) |
+| description     | TEXT         |
+| unit_of_measure | VARCHAR(50)  |
+| status          | VARCHAR(20)  |
+| created_at      | TIMESTAMP TZ |
+| updated_at      | TIMESTAMP TZ |
+
+### Exemplos
+
+```text
+Name:
+Produtividade
+
+Code:
+PRODUCTIVITY
+
+Unit:
+UNITS_PER_HOUR
+```
+
+Outro:
+
+```text
+Name:
+SLA
+
+Code:
+SLA_COMPLIANCE
+
+Unit:
+PERCENTAGE
+```
+
+### Constraint
+
+```text
+UNIQUE(organization_id, code)
+```
+
+---
+
+# 21. INDICATORS — OPERATION_INDICATORS
+
+Relaciona indicadores às operações.
+
+```text
+operation_indicators
+```
+
+| Campo                   | Tipo lógico  |
+| ----------------------- | ------------ |
+| operation_id            | UUID         |
+| indicator_definition_id | UUID         |
+| is_active               | BOOLEAN      |
+| created_at              | TIMESTAMP TZ |
+
+### Constraints
+
+```text
+PK(
+    operation_id,
+    indicator_definition_id
+)
+
+FK(operation_id)
+→ operations(id)
+
+FK(indicator_definition_id)
+→ indicator_definitions(id)
+```
+
+---
+
+# 22. Modelo lógico consolidado
+
+Agora temos a estrutura completa da primeira versão.
+
+```text
+CORE
+│
+├── organizations
+│
+├── units
+│
+├── departments
+│
+├── unit_departments
+│
+├── users
+│
+├── roles
+│
+├── permissions
+│
+├── user_roles
+│
+├── role_permissions
+│
+└── user_units
+
+
+OPERATIONS
+│
+├── operations
+│
+├── operational_records
+│
+└── operational_goals
+
+
+INDICATORS
+│
+├── indicator_definitions
+│
+└── operation_indicators
+```
+
+Total inicial:
+
+```text
+15 tabelas
+```
+
+---
+
+# 23. Relacionamento lógico consolidado
+
+```text
+ORGANIZATIONS
+│
+├──────────────< UNITS
+│                    │
+│                    │
+│              USER_UNITS >──── USERS
+│
+├──────────────< DEPARTMENTS
+│
+├──────────────< ROLES
+│                    │
+│                    └── USER_ROLES >── USERS
+│
+└──────────────< INDICATOR_DEFINITIONS
+
+
+UNITS
+  │
+  └──────< UNIT_DEPARTMENTS >────── DEPARTMENTS
+                    │
+                    ▼
+               OPERATIONS
+                │       │
+                │       │
+                ▼       ▼
+     OPERATIONAL_RECORDS OPERATIONAL_GOALS
+                │
+                ▼
+       OPERATION_INDICATORS
+                │
+                ▼
+       INDICATOR_DEFINITIONS
+
+
+ROLES
+   │
+   ▼
+ROLE_PERMISSIONS
+   │
+   ▼
+PERMISSIONS
+```
+
+---
+
+# 24. Estratégia de integridade multiempresa
+
+Este é um dos pontos mais importantes do projeto.
+
+Temos relações indiretas como:
+
+```text
+User
+  ↓
+Organization A
+```
+
+e:
+
+```text
+Unit
+  ↓
+Organization A
+```
+
+Quando criamos:
+
+```text
+UserUnit
+```
+
+precisamos garantir:
+
+```text
+User.organization_id
+=
+Unit.organization_id
+```
+
+O mesmo ocorre com:
+
+```text
+UnitDepartment
+```
+
+Precisamos garantir:
+
+```text
+Unit.organization_id
+=
+Department.organization_id
+```
+
+E também:
+
+```text
+Operation
+```
+
+indiretamente pertence à organização através da cadeia:
+
+```text
+Operation
+    ↓
+UnitDepartment
+    ↓
+Unit
+    ↓
+Organization
+```
+
+---
+
+# 25. Decisão sobre integridade organizacional
+
+Existem duas estratégias.
+
+## Estratégia A — Validar apenas na aplicação
+
+```text
+FastAPI Service Layer
+```
+
+valida se as entidades pertencem à mesma organização.
+
+### Vantagem
+
+Banco mais simples.
+
+### Desvantagem
+
+A integridade depende da aplicação.
+
+---
+
+## Estratégia B — Reforçar também no banco
+
+Adicionar:
+
+```text
+organization_id
+```
+
+em mais tabelas.
+
+Exemplo:
+
+```text
+operations
+
+id
+organization_id
+unit_department_id
+```
+
+Isso cria redundância controlada.
+
+Mas facilita:
+
+* filtros multiempresa;
+* índices;
+* Row Level Security futura;
+* validação de integridade.
+
+---
+
+# Minha recomendação
+
+Para o OpsMetrics, recomendo uma abordagem híbrida:
+
+### Entidades principais
+
+Possuir:
+
+```text
+organization_id
+```
+
+diretamente.
+
+Por exemplo:
+
+```text
+operations
+operational_records
+operational_goals
+```
+
+Mesmo que seja possível descobrir a organização através dos relacionamentos.
+
+Isso melhora consultas como:
+
+```sql
+SELECT *
+FROM operational_records
+WHERE organization_id = '...';
+```
+
+Sem múltiplos JOINs.
+
+---
+
+# 26. Ajuste no modelo para Multi-Tenancy
+
+Portanto, vamos estabelecer a seguinte regra:
+
+> Todas as entidades pertencentes ao domínio de negócio devem possuir `organization_id` diretamente.
+
+Exemplo:
+
+```text
+operations
+
+id
+organization_id
+unit_department_id
+...
+```
+
+```text
+operational_records
+
+id
+organization_id
+operation_id
+...
+```
+
+```text
+operational_goals
+
+id
+organization_id
+operation_id
+...
+```
+
+Isso é uma forma de:
+
+# Tenant-Aware Data Modeling
+
+---
+
+# 27. Atenção: redundância controlada
+
+Normalmente aprendemos:
+
+> Não duplicar dados.
+
+Mas em sistemas corporativos e multiempresa existe um conceito importante:
+
+> **Redundância controlada pode melhorar segurança e performance.**
+
+Exemplo:
+
+```text
+OperationalRecord
+        │
+        ├── organization_id
+        │
+        └── operation_id
+                │
+                ▼
+             Operation
+                │
+                ▼
+           Organization
+```
+
+Sim, tecnicamente conseguimos chegar à organização.
+
+Mas ter:
+
+```text
+organization_id
+```
+
+diretamente permite:
+
+```text
+Tenant Filters
+```
+
+mais eficientes.
+
+---
+
+# 28. Regras adicionais de integridade
+
+Vamos incluir algumas regras.
+
+### RN-017 — Tenant Consistency
+
+Nenhuma entidade relacionada pode cruzar organizações.
+
+Exemplo inválido:
+
+```text
+Organization A
+
+Operation A
+```
+
+associada a:
+
+```text
+OperationalRecord
+
+Organization B
+```
+
+Isso deve ser bloqueado.
+
+---
+
+### RN-018 — Código único por contexto
+
+Códigos técnicos devem ser únicos dentro do contexto correto.
+
+Exemplo:
+
+```text
+Unit:
+UNIQUE(organization_id, code)
+```
+
+```text
+Department:
+UNIQUE(organization_id, code)
+```
+
+```text
+Operation:
+UNIQUE(unit_department_id, code)
+```
+
+---
+
+### RN-019 — Dados históricos
+
+Registros operacionais não devem ser alterados sem necessidade.
+
+No futuro, poderemos implementar:
+
+```text
+audit_log
+```
+
+Mas não na primeira entrega.
+
+---
+
+# 29. Decisão sobre exclusão
+
+Vamos formalizar.
+
+| Entidade            | Estratégia          |
+| ------------------- | ------------------- |
+| Organization        | Inativação          |
+| Unit                | Inativação          |
+| Department          | Inativação          |
+| User                | Inativação          |
+| Role                | Inativação          |
+| Operation           | Inativação          |
+| IndicatorDefinition | Inativação          |
+| OperationalRecord   | Restrição           |
+| OperationalGoal     | Restrição/Histórico |
+
+Isso significa que, por exemplo:
+
+```text
+Operation
+
+status = INACTIVE
+```
+
+é preferível a apagar a operação.
+
+Por quê?
+
+Porque existem:
+
+```text
+OperationalRecords
+OperationalGoals
+Indicators
+```
+
+relacionados.
+
+---
+
+# 30. Decisões oficiais da etapa 3.4
+
+Vamos consolidar o que foi definido.
+
+## Identificadores
+
+```text
+UUID
+```
+
+## Banco
+
+```text
+PostgreSQL
+```
+
+## Multiempresa
+
+```text
+Shared Database
+Shared Schema
+Organization ID
+```
+
+## Auditoria básica
+
+```text
+created_at
+updated_at
+```
+
+## Status
+
+```text
+VARCHAR + CHECK CONSTRAINT
+```
+
+## Exclusão
+
+```text
+Inativação para entidades mestres
+```
+
+## Relacionamentos
+
+```text
+Foreign Keys
+```
+
+## Tabelas associativas
+
+```text
+Composite Primary Keys
+```
+
+quando apropriado.
+
+## Integridade
+
+```text
+Application Validation
++
+Database Constraints
+```
+
+---
+
+# 🏁 Resultado da FASE 3.4
+
+Agora temos um **modelo lógico suficientemente detalhado para implementar o banco**.
+
+Já definimos:
+
+* ✅ 15 entidades/tabelas iniciais;
+* ✅ atributos;
+* ✅ PKs;
+* ✅ FKs;
+* ✅ constraints;
+* ✅ unicidade;
+* ✅ status;
+* ✅ auditoria;
+* ✅ estratégia multiempresa;
+* ✅ integridade entre tenants.
+
+---
+
+# 🚀 Próxima etapa — 3.5
+
+Agora vamos transformar esse modelo em implementação real:
+
+# **MODELO FÍSICO — PostgreSQL**
+
+A próxima etapa será estruturada em blocos:
+
+```text
+3.5.1 — Criação do Database
+        ↓
+3.5.2 — Estratégia de Schemas PostgreSQL
+        ↓
+3.5.3 — Extensions
+        ↓
+3.5.4 — Tabelas Core
+        ↓
+3.5.5 — Tabelas Operations
+        ↓
+3.5.6 — Tabelas Indicators
+        ↓
+3.5.7 — Foreign Keys e Constraints
+        ↓
+3.5.8 — Índices
+        ↓
+3.5.9 — Dados iniciais (Seed)
+        ↓
+3.5.10 — Validação do banco
+```
+
+Antes de escrever o SQL, porém, vamos tomar uma decisão arquitetural importante na próxima etapa: **como organizar os schemas do PostgreSQL (`core`, `operations`, `indicators`) sem criar complexidade desnecessária para a aplicação FastAPI.**
